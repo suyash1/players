@@ -6,8 +6,7 @@ type TeamPlayer struct {
 }
 
 type Player struct {
-	FirstName string
-	LastName  string
-	FullName  string
-	Age       int64
+	FullName string
+	Age      int64
+	TeamName string
 }

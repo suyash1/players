@@ -8,26 +8,17 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	_ "sync"
 	"time"
 	"utils"
 )
 
-// func worker(id int, url string, wg *sync.WaitGroup) {
-// 	fmt.Printf("Worker %d starting\n", id)
-// 	fmt.Println(url)
-
-// 	response := utils.GET(url)
-// 	fmt.Printf("Worker %d done\n", id)
-// 	fmt.Println(response)
-
-// 	wg.Done()
-// }
-
 type result struct {
-	index int
-	res   http.Response
-	err   error
+	index  int
+	status int
+	res    http.Response
+	err    error
 }
 
 func boundedParallelGet(urls []string, concurrencyLimit int) []result {
@@ -66,7 +57,7 @@ func boundedParallelGet(urls []string, concurrencyLimit int) []result {
 			if res.StatusCode != 200 {
 				fmt.Println(url, res.StatusCode)
 			}
-			result := &result{i, *res, nil}
+			result := &result{i, res.StatusCode, *res, nil}
 
 			// now we can send the result struct through the resultsChan
 			resultsChan <- result
@@ -109,56 +100,67 @@ var urls []string
 var endPoint = "https://vintagemonster.onefootball.com/api/teams/en/"
 
 func init() {
-	for i := 1; i <= 100; i++ {
+	for i := 1; i <= 200; i++ {
 		urls = append(urls, endPoint+strconv.Itoa(i)+".json")
 	}
 	//fmt.Println(urls)
 }
 
+var LookupTeams = map[string]bool{"Germany": false, "England": false, "France": false,
+	"Spain": false, "Arsenal": false, "Chelsea": false, "Barcelona": false,
+	}
+
 func main() {
-	// endPoint := "http://vintagemonster.onefootball.com/api/teams/en/"
-	// var wg sync.WaitGroup
-
-	// for i := 1; i <= 20; i++ {
-	// 	wg.Add(1)
-	// 	go worker(i, endPoint+strconv.Itoa(i)+".json", &wg)
-	// }
-
-	// wg.Wait()
-
-	// response := utils.GET(endPoint)
-	// fmt.Println(response)
-
 	benchmark := func(urls []string, concurrency int) string {
 		startTime := time.Now()
 		results := boundedParallelGet(urls, concurrency)
-
 		teamPlayerMap := make(map[string][]models.Player)
+		var playerData []models.Player
 		for _, result := range results {
 			data := make(map[string]interface{})
-			responseData, _ := ioutil.ReadAll(result.res.Body)
-			if err := json.Unmarshal(responseData, &data); err != nil {
-				fmt.Println(err)
-			}
-			innerData := data["data"].(map[string]interface{})
-			teamData := innerData["team"].(map[string]interface{})
-			teamName := teamData["name"].(string)
-			teamPlayers := teamData["players"].([]interface{})
-			var players []models.Player
-			for _, t := range teamPlayers {
-				var teamPlayer map[string]interface{} = t.(map[string]interface{})
-				tempPlayer := models.Player{}
-				tempPlayer.FullName = teamPlayer["name"].(string)
-				tempPlayer.FirstName = teamPlayer["firstName"].(string)
-				tempPlayer.LastName = teamPlayer["lastName"].(string)
-				age, _ := strconv.ParseInt(teamPlayer["age"].(string), 10, 64)
-				tempPlayer.Age = age
-				players = append(players, tempPlayer)
-			}
-			teamPlayerMap[teamName] = players
+			if result.status == 200 {
+				responseData, _ := ioutil.ReadAll(result.res.Body)
+				if err := json.Unmarshal(responseData, &data); err != nil {
+					fmt.Println(err)
+				}
+				innerData := data["data"].(map[string]interface{})
+				teamData := innerData["team"].(map[string]interface{})
+				teamName := teamData["name"].(string)
+				if val, ok := LookupTeams[teamName]; ok {
+					if false == val {
+						teamPlayers := teamData["players"].([]interface{})
+						// var players []models.Player
+						for _, t := range teamPlayers {
+							var teamPlayer map[string]interface{} = t.(map[string]interface{})
+							tempPlayer := models.Player{}
+							tempPlayer.FullName = teamPlayer["name"].(string)
+							// tempPlayer.FirstName = teamPlayer["firstName"].(string)
+							// tempPlayer.LastName = teamPlayer["lastName"].(string)
+							age, _ := strconv.ParseInt(teamPlayer["age"].(string), 10, 64)
+							tempPlayer.Age = age
+							tempPlayer.TeamName = teamName
+							playerData = append(playerData, tempPlayer)
+						}
+						teamPlayerMap[teamName] = playerData
+						LookupTeams[teamName] = true
+					}
+				}
 
+			}
 		}
-		fmt.Println(teamPlayerMap)
+		// fmt.Println(playerData)
+		playerTeamMap := make(map[string][]string)
+		for _, data := range playerData {
+			if val, ok := playerTeamMap[data.FullName]; ok {
+				val = append(val, data.TeamName)
+				playerTeamMap[data.FullName] = val
+			} else {
+				playerTeamMap[data.FullName + "; " + fmt.Sprint(data.Age) + "; "] = []string{data.TeamName}
+			}
+		}
+		for k, v := range playerTeamMap {
+			fmt.Println(k, strings.Join(v, ";"))
+		}
 		seconds := time.Since(startTime).Seconds()
 		tmplate := "%d bounded parallel requests: %d/%d in %v"
 		return fmt.Sprintf(tmplate, concurrency, len(results), len(urls), seconds)
